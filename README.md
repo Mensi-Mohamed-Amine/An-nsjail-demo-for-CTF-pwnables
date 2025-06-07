@@ -1,9 +1,13 @@
-Here’s a polished, self-contained demo you can publish as a GitHub repository. It covers:
+# 🛡️ An nsjail demo for CTF pwnables
 
-- Installing nsjail from source
-- Preparing your challenge and building a minimal chroot jail
-- Launching the jailed service
-- Notes on integrating with Docker for repeatable environments
+I’ve put together a self-contained demo you can push to GitHub. In it, I walk through:
+
+- How I install **nsjail** from source
+- How I prepare my challenge and build a minimal chroot jail
+- How I launch the jailed service
+- How you can wrap it all in Docker for a fully repeatable environment
+
+Feel free to swap in your own pwnables and tweak any paths or flags to fit your CTF setup!
 
 –––
 
