@@ -1,154 +1,177 @@
-Here's a professional `README.md` for a GitHub repository that demonstrates how to run a **CTF pwnable challenge in a chroot-like jail using [NSJail](https://github.com/google/nsjail)**. This README includes:
+Here’s a polished, self-contained demo you can publish as a GitHub repository. It covers:
 
-- Project purpose
-- Generalized, secure setup script
-- Instructions for building NSJail from source
-- Docker integration note
+- Installing nsjail from source
+- Preparing your challenge and building a minimal chroot jail
+- Launching the jailed service
+- Notes on integrating with Docker for repeatable environments
 
----
+–––
 
-# 🛡️ Pwnables Jail with NSJail (Google Sandbox Tool)
+## 📁 Repository Layout
 
-This project demonstrates how to isolate and serve CTF-style pwnable challenges using [`nsjail`](https://github.com/google/nsjail) — a powerful sandboxing tool developed by Google. The approach is compatible with Docker and ideal for securely deploying challenges in a contained environment.
-
-## 📦 Features
-
-- 🔐 Run binaries in a secure chroot jail using NSJail
-- 🧩 Automatically gather and copy binary dependencies into the jail
-- 🛠️ Works without Docker, but can be containerized easily
-- 🧪 Supports forking network services using `socat` inside the jail
-
----
-
-## ⚙️ NSJail Installation (From Source)
-
-````bash
-# Install dependencies
-sudo apt update
-sudo apt install -y git build-essential libprotobuf-dev protobuf-compiler libnl-route-3-dev libcap-dev libprotobuf-c-dev pkg-config libtool automake bison flex
-
-# Clone NSJail
-git clone https://github.com/google/nsjail.git
-cd nsjail
-
-# Build
-make -j$(nproc)
-
-# Optionally, move binary to /usr/local/bin
-sudo cp nsjail /usr/local/bin/
-
-
----
-
-## 🚀 Setup Script (Generalized)
-
-Here's the improved version of your setup script:
-
-```bash
-#!/bin/bash
-
-# Set base jail path
-JAIL_BASE="${HOME}/ctf_jail"
-CHALLENGE_NAME="broken_shell"
-CHALLENGE_PATH="${JAIL_BASE}/PWN_1/${CHALLENGE_NAME}"
-
-# Create jail directory
-mkdir -p "$CHALLENGE_PATH"
-
-# Copy binary to /usr/local/bin for dependency resolution
-sudo cp "./${CHALLENGE_NAME}" /usr/local/bin/
-
-# List of commands to include in jail
-COMMANDS=("nohup" "cat" "socat" "ls" "clear" "sh" "nc" "bash" "${CHALLENGE_NAME}")
-
-# Copy commands and their libraries
-for cmd in "${COMMANDS[@]}"; do
-    cmd_path=$(command -v "$cmd")
-    if [[ -z "$cmd_path" ]]; then
-        echo "Warning: '$cmd' not found, skipping..."
-        continue
-    fi
-
-    mkdir -p "$CHALLENGE_PATH$(dirname "$cmd_path")"
-    cp "$cmd_path" "$CHALLENGE_PATH$cmd_path"
-
-    for lib in $(ldd "$cmd_path" | awk '{print $3}' | grep '^/'); do
-        mkdir -p "$CHALLENGE_PATH$(dirname "$lib")"
-        cp "$lib" "$CHALLENGE_PATH$lib"
-    done
-done
-
-# Set up /proc
-sudo mkdir -p "$CHALLENGE_PATH/proc"
-sudo mount -t proc proc "$CHALLENGE_PATH/proc"
-
-# Set up /dev/null
-sudo mkdir -p "$CHALLENGE_PATH/dev"
-sudo mknod -m 666 "$CHALLENGE_PATH/dev/null" c 1 3 || true
-sudo chmod 666 "$CHALLENGE_PATH/dev/null"
-sudo mount --bind /dev/null "$CHALLENGE_PATH/dev/null"
-
-echo "✅ Jail environment is ready."
-````
-
----
-
-## 🔐 Running the Challenge Inside the Jail
-
-Start the jailed shell with NSJail:
-
-```bash
-sudo nsjail -Mo --chroot "$CHALLENGE_PATH" --disable_clone_newnet -- /usr/bin/sh
+```
+.
+├── README.md
+├── scripts
+│   └── setup_jail.sh
+└── challenges
+    └── broken_shell               # Your vulnerable binary
 ```
 
-Once inside the jailed environment:
+---
+
+## 🔧 1. Installing nsjail from Source
+
+```bash
+# 1. Install build dependencies
+sudo apt update
+sudo apt install -y build-essential cmake git libcap-dev libprotobuf-dev protobuf-compiler
+
+# 2. Clone and build
+git clone https://github.com/google/nsjail.git
+cd nsjail
+mkdir -p build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make -j"$(nproc)"
+
+# 3. Optionally install to /usr/local/bin
+sudo make install
+```
+
+Now you should have `nsjail` available on your `$PATH`.
+
+---
+
+## 🛠 2. Preparing the Jail
+
+Place your challenge binary under `challenges/`. In this demo it’s `broken_shell`.
+
+### scripts/setup_jail.sh
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# General paths (customize as needed)
+BASE_DIR="${HOME}/nsjail-demo"           # top-level demo directory
+CHALLENGE_NAME="broken_shell"            # name of your binary
+CHALLENGE_DIR="${BASE_DIR}/chroot"       # will become the jail root
+BIN_DIR="/usr/bin"                       # inside the jail
+
+# 0️⃣ Create directories
+mkdir -p "${CHALLENGE_DIR}${BIN_DIR}"
+
+# 1️⃣ Copy your binary into jail
+cp "challenges/${CHALLENGE_NAME}" "${CHALLENGE_DIR}${BIN_DIR}/"
+
+# 2️⃣ Copy all required commands + libs
+COMMANDS=( "nohup" "cat" "socat" "ls" "clear" "sh" "nc" "bash" "${CHALLENGE_NAME}" )
+for cmd in "${COMMANDS[@]}"; do
+  cmd_path="$(which "${cmd}" 2>/dev/null || true)"
+  if [[ -z "${cmd_path}" ]]; then
+    echo "⚠️  ${cmd} not found on host; skipping."
+    continue
+  fi
+
+  # create path inside jail and copy executable
+  mkdir -p "${CHALLENGE_DIR}$(dirname "${cmd_path}")"
+  cp "${cmd_path}" "${CHALLENGE_DIR}${cmd_path}"
+
+  # copy all shared-object dependencies
+  ldd "${cmd_path}" | awk '/\// {print $1}' | while read -r lib; do
+    mkdir -p "${CHALLENGE_DIR}$(dirname "${lib}")"
+    cp "${lib}" "${CHALLENGE_DIR}${lib}"
+  done
+done
+
+# 3️⃣ Mount proc filesystem
+sudo mkdir -p "${CHALLENGE_DIR}/proc"
+sudo mount -t proc proc "${CHALLENGE_DIR}/proc"
+
+# 4️⃣ Provide /dev/null for nohup
+sudo mkdir -p "${CHALLENGE_DIR}/dev"
+sudo mknod -m 666 "${CHALLENGE_DIR}/dev/null" c 1 3
+sudo mount --bind /dev/null "${CHALLENGE_DIR}/dev/null"
+
+echo "✅ Jail environment prepared at ${CHALLENGE_DIR}"
+```
+
+Make it executable:
+
+```bash
+chmod +x scripts/setup_jail.sh
+```
+
+Run it:
+
+```bash
+./scripts/setup_jail.sh
+```
+
+---
+
+## 🚀 3. Launching the Jailed Service
+
+With your jail ready, start an interactive shell inside nsjail:
+
+```bash
+nsjail \
+  --chroot "${HOME}/nsjail-demo/chroot" \
+  --disable_clone_newnet \
+  --mount_proc \
+  --port 15027:15027 \
+  --user 9999 --group 9999 \
+  --exec "/usr/bin/sh"
+```
+
+Inside the jail shell:
 
 ```sh
 cd /usr/bin
-nohup socat TCP-LISTEN:15027,reuseaddr,fork EXEC:./broken_shell > /dev/null 2>&1 &
+# start your broken_shell exploit service on TCP port 15027
+nohup socat TCP-LISTEN:15027,reuseaddr,fork EXEC:./broken_shell \
+     > /dev/null 2>&1 &
 ```
+
+Now your CTF service is reachable on `localhost:15027` (or via your host’s IP if allowed).
 
 ---
 
-## 🐳 Docker Integration (Optional)
+## 🐳 4. Combining with Docker
 
-You can integrate this setup inside a Docker container for better portability. Here’s a basic idea:
+To ensure full reproducibility and isolate your host from root-mount operations, wrap everything in Docker:
 
-```dockerfile
-FROM debian:bullseye
+1. **Dockerfile** in your repo root:
 
-RUN apt update && apt install -y socat bash netcat procps coreutils
+   ```dockerfile
+   FROM ubuntu:24.04
+   RUN apt update && apt install -y \
+       build-essential cmake git libcap-dev libprotobuf-dev protobuf-compiler socat procps iproute2
+   COPY . /opt/nsjail-demo
+   WORKDIR /opt/nsjail-demo
+   RUN ./scripts/setup_jail.sh && \
+       cd nsjail/build && make install
+   CMD ["nsjail", "--chroot", "/opt/nsjail-demo/chroot",
+        "--disable_clone_newnet", "--mount_proc",
+        "--port", "15027:15027", "--user", "9999", "--group", "9999",
+        "--exec", "/usr/bin/sh"]
+   ```
 
-COPY nsjail /usr/local/bin/
-COPY jail_setup.sh /root/
-COPY broken_shell /usr/local/bin/
+2. **Build & Run**:
 
-RUN chmod +x /root/jail_setup.sh && /root/jail_setup.sh
+   ```bash
+   docker build -t nsjail-demo:latest .
+   docker run --rm -it -p 15027:15027 --cap-add=SYS_PTRACE nsjail-demo:latest
+   ```
 
-CMD ["nsjail", "-Mo", "--chroot", "/root/ctf_jail/PWN_1/broken_shell", "-- /usr/bin/sh"]
-```
-
----
-
-## 🧠 Notes
-
-- NSJail supports `cgroups`, `seccomp`, and `user namespaces`. You can enable those for stricter isolation.
-- If you're not running as root, ensure you have necessary capabilities (e.g. via Docker `--cap-add=SYS_ADMIN`).
-- Make sure your challenge binary is **static or properly resolved** to prevent runtime errors.
-
----
-
-## 📜 License
-
-MIT or your preferred license.
+Inside the container you’ll get a shell in the jail; from there you can `cd /usr/bin` and launch your challenge the same way.
 
 ---
 
-## 🙋‍♂️ Contribution
+## 🎯 Summary
 
-Pull requests welcome! If you have additional examples (e.g., with Docker Compose or `inetd`), feel free to contribute.
+- **`setup_jail.sh`** automates creating a minimal chroot & copying binaries/libs.
+- **nsjail** gives you lightweight, namespace-based jails.
+- **Docker** adds a layer of reproducibility and host isolation.
 
-```
-
-Would you like me to generate the full project structure (folder tree, `Dockerfile`, `.gitignore`, etc.) or prepare a GitHub-ready ZIP file structure?
-```
+Feel free to fork this repo, swap in your own pwnables, and adjust flags (UID/GID, network namespaces, seccomp filters) to tighten your CTF environment. Good luck!
